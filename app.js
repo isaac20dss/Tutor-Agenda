@@ -973,14 +973,14 @@
 
         <form id="login-form" autocomplete="off">
           <div class="auth-mode-switch" role="tablist">
-            <button type="button" class="auth-mode-btn active" data-mode="username" role="tab">Usuário</button>
+            <button type="button" class="auth-mode-btn active" data-mode="username" role="tab">Isaac</button>
             <button type="button" class="auth-mode-btn" data-mode="email" role="tab">E-mail</button>
             <button type="button" class="auth-mode-btn" data-mode="phone" role="tab">Telefone</button>
           </div>
 
           <div class="field">
             <label class="field-label" for="login-id" id="login-id-label">Nome de usuário</label>
-            <input type="text" class="input" id="login-id" placeholder="Usuário" autocomplete="off" />
+            <input type="text" class="input" id="login-id" placeholder="Isaac" autocomplete="off" />
           </div>
 
           <div class="field">
