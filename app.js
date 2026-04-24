@@ -145,54 +145,133 @@
   // STATE MANAGEMENT
   // =========================================================
 
-  let state = loadState();
+  let state = loadLocalState();
 
-  function loadState() {
+  function mergeWithDefaults(parsed) {
+    const def = defaultState();
+    const merged = { ...def, ...parsed };
+    merged.settings = { ...def.settings, ...(parsed.settings || {}) };
+    merged.settings.brand = { ...def.settings.brand, ...((parsed.settings || {}).brand || {}) };
+    merged.settings.shortcuts = { ...def.settings.shortcuts, ...((parsed.settings || {}).shortcuts || {}) };
+    return merged;
+  }
+
+  function loadLocalState() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return defaultState();
-      const parsed = JSON.parse(raw);
-      // Merge with defaults to ensure all fields exist (schema migration)
-      const def = defaultState();
-      const merged = { ...def, ...parsed };
-      merged.settings = { ...def.settings, ...(parsed.settings || {}) };
-      merged.settings.brand = { ...def.settings.brand, ...((parsed.settings || {}).brand || {}) };
-      merged.settings.shortcuts = { ...def.settings.shortcuts, ...((parsed.settings || {}).shortcuts || {}) };
-      return merged;
+      return mergeWithDefaults(JSON.parse(raw));
     } catch (e) {
-      console.error('Failed to load state', e);
+      console.error('Failed to load local state', e);
       return defaultState();
     }
   }
 
+  function saveLocalOnly() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+    catch (e) { console.error('Failed to save local state', e); }
+  }
+
   function saveState(silent = false) {
+    saveLocalOnly();
+    if (!remoteLoaded || !supabase || !state.currentUserId || !state.sessionActive) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      const payload = { owner_id: state.currentUserId, data: state, updated_at: new Date().toISOString() };
+      lastSaveAt = Date.now();
+      supabase.from('app_state').upsert(payload, { onConflict: 'owner_id' }).then(({ error }) => {
+        if (error) {
+          console.error('Supabase save error', error);
+          if (!silent) showError('Erro ao sincronizar', 'Seus dados estão salvos localmente, mas falhou ao sincronizar com o servidor: ' + (error.message || 'erro desconhecido'));
+        }
+      });
+    }, 400);
+  }
+
+  function subscribeRealtime() {
+    if (!supabase || !state.currentUserId) return;
+    if (realtimeChannel) { supabase.removeChannel(realtimeChannel); realtimeChannel = null; }
+    realtimeChannel = supabase
+      .channel('app_state_' + state.currentUserId)
+      .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'app_state', filter: `owner_id=eq.${state.currentUserId}` },
+          (payload) => {
+            // Ignore our own echoes (saved < 2s ago)
+            if (Date.now() - lastSaveAt < 2000) return;
+            const row = payload.new;
+            if (!row || !row.data) return;
+            const uid = state.currentUserId;
+            state = mergeWithDefaults(row.data);
+            state.currentUserId = uid;
+            state.sessionActive = true;
+            saveLocalOnly();
+            rerender();
+          })
+      .subscribe();
+  }
+
+  function unsubscribeRealtime() {
+    if (supabase && realtimeChannel) {
+      supabase.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+    }
+  }
+
+  async function onSignedIn(session) {
+    const uid = session.user.id;
+    const email = session.user.email || '';
+    let remote = null;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-      if (!silent && broadcastChannel) {
-        broadcastChannel.postMessage({ type: 'sync', timestamp: Date.now() });
-      }
+      const { data, error } = await supabase
+        .from('app_state')
+        .select('data')
+        .eq('owner_id', uid)
+        .maybeSingle();
+      if (error) throw error;
+      remote = data;
     } catch (e) {
-      console.error('Failed to save state', e);
-      showError('Erro ao salvar', 'Não foi possível salvar os dados localmente. Verifique o espaço disponível.');
+      console.error('Failed to fetch app_state', e);
+      showError('Erro ao carregar', 'Não foi possível carregar seus dados do servidor: ' + (e.message || 'erro de rede') + '. Usando cache local.');
     }
+
+    if (remote && remote.data) {
+      state = mergeWithDefaults(remote.data);
+    } else {
+      // First sign-in for this user: seed with current local state (or defaults)
+      state = mergeWithDefaults(loadLocalState());
+    }
+    state.currentUserId = uid;
+    state.sessionActive = true;
+    if (!state.users[0]) state.users.unshift({ id: uid, username: email.split('@')[0] || 'user', password: '', email, phone: '', role: 'admin', createdAt: Date.now() });
+    state.users[0].id = uid;
+    state.users[0].email = email;
+    if (!state.users[0].username) state.users[0].username = email.split('@')[0] || 'user';
+
+    saveLocalOnly();
+    remoteLoaded = true;
+
+    // If row didn't exist, create it with current state
+    if (!remote) {
+      try {
+        await supabase.from('app_state').upsert(
+          { owner_id: uid, data: state, updated_at: new Date().toISOString() },
+          { onConflict: 'owner_id' }
+        );
+      } catch (e) { console.error('Failed to seed app_state row', e); }
+    }
+
+    subscribeRealtime();
+    rerender();
   }
 
-  if (broadcastChannel) {
-    broadcastChannel.addEventListener('message', (ev) => {
-      if (ev.data && ev.data.type === 'sync') {
-        state = loadState();
-        rerender();
-      }
-    });
+  async function onSignedOut() {
+    remoteLoaded = false;
+    unsubscribeRealtime();
+    state = defaultState();
+    saveLocalOnly();
+    rerender();
   }
-
-  // Also sync across tabs via storage event fallback
-  window.addEventListener('storage', (e) => {
-    if (e.key === STORAGE_KEY) {
-      state = loadState();
-      rerender();
-    }
-  });
 
   // =========================================================
   // UTILITIES
@@ -972,23 +1051,17 @@
         <p class="sub">Entre com suas credenciais para acessar o painel.</p>
 
         <form id="login-form" autocomplete="off">
-          <div class="auth-mode-switch" role="tablist">
-            <button type="button" class="auth-mode-btn active" data-mode="username" role="tab">Isaac</button>
-            <button type="button" class="auth-mode-btn" data-mode="email" role="tab">E-mail</button>
-            <button type="button" class="auth-mode-btn" data-mode="phone" role="tab">Telefone</button>
-          </div>
-
           <div class="field">
-            <label class="field-label" for="login-id" id="login-id-label">Nome de usuário</label>
-            <input type="text" class="input" id="login-id" placeholder="Isaac" autocomplete="off" />
+            <label class="field-label" for="login-id" id="login-id-label">E-mail</label>
+            <input type="email" class="input" id="login-id" placeholder="voce@exemplo.com" autocomplete="username" />
           </div>
 
           <div class="field">
             <label class="field-label" for="login-pw">Senha</label>
-            <input type="password" class="input" id="login-pw" placeholder="••••••••" autocomplete="off" />
+            <input type="password" class="input" id="login-pw" placeholder="••••••••" autocomplete="current-password" />
           </div>
 
-          <button class="btn btn-primary btn-lg btn-block mt-sm" type="submit">Entrar</button>
+          <button class="btn btn-primary btn-lg btn-block mt-sm" type="submit" id="login-submit">Entrar</button>
 
           <div class="mt-md text-center text-sm">
             <a href="#" id="forgot-link" class="text-muted">Esqueci minha senha</a>
@@ -1002,49 +1075,39 @@
   function bindLoginEvents() {
     const form = $('#login-form');
     const idInput = $('#login-id');
-    const idLabel = $('#login-id-label');
-    const modeBtns = $$('.auth-mode-btn');
-    let mode = 'username';
+    const submitBtn = $('#login-submit');
 
-    modeBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        modeBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        mode = btn.dataset.mode;
-        const labels = { username: 'Nome de usuário', email: 'E-mail', phone: 'Telefone' };
-        const placeholders = { username: 'Usuário', email: 'voce@exemplo.com', phone: '(48) 99999-0000' };
-        idLabel.textContent = labels[mode];
-        idInput.placeholder = placeholders[mode];
-        idInput.value = '';
-      });
-    });
-
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const idVal = idInput.value.trim();
+      const email = idInput.value.trim();
       const pw = $('#login-pw').value;
-      if (!idVal || !pw) {
-        showError('Campos obrigatórios', 'Preencha o identificador e a senha para entrar.');
+      if (!email || !pw) {
+        showError('Campos obrigatórios', 'Preencha o e-mail e a senha para entrar.');
         return;
       }
-      const user = state.users.find(u => {
-        if (mode === 'username') return (u.username || '').toLowerCase() === idVal.toLowerCase();
-        if (mode === 'email') return (u.email || '').toLowerCase() === idVal.toLowerCase();
-        if (mode === 'phone') return (u.phone || '').replace(/\D/g, '') === idVal.replace(/\D/g, '');
-        return false;
-      });
-      if (!user || user.password !== pw) {
-        showError('Falha no login', 'Usuário ou senha incorretos. Verifique suas credenciais e tente novamente.');
+      if (!supabase) {
+        showError('Serviço indisponível', 'Não foi possível conectar ao servidor de autenticação. Verifique sua conexão e recarregue a página.');
         return;
       }
-      state.currentUserId = user.id;
-      state.sessionActive = true;
-      saveState();
-      toast('ok', `Bem-vindo, ${user.username}!`, 'Login realizado com sucesso.');
-      rerender();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Entrando...';
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password: pw });
+        if (error) throw error;
+        toast('ok', 'Bem-vindo!', 'Login realizado com sucesso.');
+        await onSignedIn(data.session);
+      } catch (err) {
+        console.error('Login error', err);
+        const msg = (err && err.message) || 'Erro desconhecido.';
+        showError('Falha no login', msg.includes('Invalid login') ? 'E-mail ou senha incorretos.' : msg);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Entrar';
+      }
     });
 
-    $('#forgot-link').addEventListener('click', (e) => {
+    const forgot = $('#forgot-link');
+    if (forgot) forgot.addEventListener('click', (e) => {
       e.preventDefault();
       openForgotModal();
     });
@@ -1221,11 +1284,9 @@
 
     const logoutBtn = $('[data-action="logout"]');
     if (logoutBtn) logoutBtn.addEventListener('click', () => {
-      showConfirm('Sair do sistema', 'Tem certeza que deseja encerrar a sessão?', () => {
-        state.sessionActive = false;
-        state.currentUserId = null;
-        saveState();
-        rerender();
+      showConfirm('Sair do sistema', 'Tem certeza que deseja encerrar a sessão?', async () => {
+        try { if (supabase) await supabase.auth.signOut(); } catch (e) { console.error('Signout error', e); }
+        await onSignedOut();
       }, 'Sair');
     });
 
@@ -7761,11 +7822,52 @@ Ana Souza,(48)98888-0000,ana@email.com,Av Y 456,,</pre>
     if (chordBuffer === shortcuts.goStudents) { appView.route = 'students'; rerender(); chordBuffer = ''; return; }
   });
 
-  // Initial render
+  // =========================================================
+  // INITIAL RENDER + SUPABASE BOOT
+  // =========================================================
+
+  async function boot() {
+    // If Supabase SDK failed to load, fall back to local-only mode (login disabled)
+    if (!supabase) {
+      state.sessionActive = false;
+      state.currentUserId = null;
+      rerender();
+      showError('Serviço offline', 'Não foi possível carregar o Supabase SDK. Verifique sua conexão e recarregue a página.');
+      return;
+    }
+
+    // React to auth changes (e.g. token refresh or sign-out in another tab)
+    supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        await onSignedOut();
+      } else if (event === 'SIGNED_IN' && session && !remoteLoaded) {
+        await onSignedIn(session);
+      } else if (event === 'TOKEN_REFRESHED' && session && !remoteLoaded) {
+        await onSignedIn(session);
+      }
+    });
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        await onSignedIn(session);
+      } else {
+        state.sessionActive = false;
+        state.currentUserId = null;
+        rerender();
+      }
+    } catch (e) {
+      console.error('Boot error', e);
+      state.sessionActive = false;
+      state.currentUserId = null;
+      rerender();
+    }
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', rerender);
+    document.addEventListener('DOMContentLoaded', boot);
   } else {
-    rerender();
+    boot();
   }
 
 })();
