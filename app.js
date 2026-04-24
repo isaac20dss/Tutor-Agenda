@@ -7,16 +7,30 @@
   'use strict';
 
   // =========================================================
-  // STORAGE (localStorage with broadcast channel for real-time sync)
+  // STORAGE (Supabase with localStorage cache; realtime for multi-device sync)
   // =========================================================
 
   const STORAGE_KEY = 'tutoragenda_v1';
-  let broadcastChannel = null;
+
+  const SUPABASE_URL = 'https://cajwkwbohetrjswwuevj.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhandrd2JvaGV0cmpzd3d1ZXZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwNjcyMzIsImV4cCI6MjA5MjY0MzIzMn0.OecbTIbyw4_giu0qi2Ca8v23-ZH-4OGC-Cscjcci_S0';
+
+  let supabase = null;
   try {
-    broadcastChannel = new BroadcastChannel('tutoragenda_sync');
+    if (window.supabase && typeof window.supabase.createClient === 'function') {
+      supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+      });
+    }
   } catch (e) {
-    broadcastChannel = null;
+    console.error('Supabase init failed', e);
+    supabase = null;
   }
+
+  let remoteLoaded = false;       // true once we've fetched the row from Supabase
+  let realtimeChannel = null;     // active realtime subscription
+  let saveTimer = null;           // debounce timer for remote upsert
+  let lastSaveAt = 0;             // timestamp of last outgoing upsert (for realtime echo suppression)
 
   function uid(prefix = 'id') {
     return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -966,7 +980,7 @@
 
           <div class="field">
             <label class="field-label" for="login-id" id="login-id-label">Nome de usuário</label>
-            <input type="text" class="input" id="login-id" placeholder="Isaac" autocomplete="off" />
+            <input type="text" class="input" id="login-id" placeholder="Usuário" autocomplete="off" />
           </div>
 
           <div class="field">
@@ -998,7 +1012,7 @@
         btn.classList.add('active');
         mode = btn.dataset.mode;
         const labels = { username: 'Nome de usuário', email: 'E-mail', phone: 'Telefone' };
-        const placeholders = { username: 'Isaac', email: 'voce@exemplo.com', phone: '(48) 99999-0000' };
+        const placeholders = { username: 'Usuário', email: 'voce@exemplo.com', phone: '(48) 99999-0000' };
         idLabel.textContent = labels[mode];
         idInput.placeholder = placeholders[mode];
         idInput.value = '';
