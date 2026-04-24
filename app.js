@@ -1052,8 +1052,8 @@
 
         <form id="login-form" autocomplete="off">
           <div class="field">
-            <label class="field-label" for="login-id" id="login-id-label">E-mail</label>
-            <input type="email" class="input" id="login-id" placeholder="voce@exemplo.com" autocomplete="username" />
+            <label class="field-label" for="login-id" id="login-id-label">E-mail ou usuário</label>
+            <input type="text" class="input" id="login-id" placeholder="voce@exemplo.com ou Admin" autocomplete="username" />
           </div>
 
           <div class="field">
@@ -1079,16 +1079,18 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = idInput.value.trim();
+      const raw = idInput.value.trim();
       const pw = $('#login-pw').value;
-      if (!email || !pw) {
-        showError('Campos obrigatórios', 'Preencha o e-mail e a senha para entrar.');
+      if (!raw || !pw) {
+        showError('Campos obrigatórios', 'Preencha o e-mail/usuário e a senha para entrar.');
         return;
       }
       if (!supabase) {
         showError('Serviço indisponível', 'Não foi possível conectar ao servidor de autenticação. Verifique sua conexão e recarregue a página.');
         return;
       }
+      // If input contains "@", treat as email; otherwise synthesize email from username
+      const email = raw.includes('@') ? raw : `${raw.toLowerCase()}@tutoragenda.local`;
       submitBtn.disabled = true;
       submitBtn.textContent = 'Entrando...';
       try {
@@ -1099,7 +1101,7 @@
       } catch (err) {
         console.error('Login error', err);
         const msg = (err && err.message) || 'Erro desconhecido.';
-        showError('Falha no login', msg.includes('Invalid login') ? 'E-mail ou senha incorretos.' : msg);
+        showError('Falha no login', msg.includes('Invalid login') ? 'Credenciais incorretas.' : msg);
       } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Entrar';
