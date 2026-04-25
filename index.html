@@ -3324,12 +3324,12 @@ button:focus:not(:focus-visible) { outline: none; }
   min-height: calc(var(--day-col-h, 900px) * var(--zoom-mult));
 }
 
-/* Content container em zoom mode — clip o pan */
+/* Content container em zoom mode — scrollbars para navegação */
 .zoom-mode-active #calendar-content {
-  overflow: hidden !important;
+  overflow: auto !important;
 }
 
-/* Remove scroll interno da grid quando zoom ativo — pan controla tudo */
+/* Remove scroll interno da grid — container externo controla scroll */
 .zoom-mode-active .calendar-week-grid {
   overflow: visible !important;
   max-height: none !important;

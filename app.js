@@ -1780,7 +1780,7 @@
     <div class="${isZoom ? 'zoom-mode-active' : ''}" id="calendar-root" style="--zoom-mult:${sc}">
       ${renderCalendarToolbar()}
       <div id="calendar-content" style="position:relative;overflow:hidden">
-        <div class="zoom-viewport" id="zoom-viewport" style="transform:translate(${tx}px, ${ty}px);transform-origin:0 0;will-change:transform">
+        <div class="zoom-viewport" id="zoom-viewport">
           ${renderCalendarContent()}
         </div>
       </div>
@@ -2245,14 +2245,9 @@
    */
   function applyZoomTransform() {
     const root = document.getElementById('calendar-root');
-    const viewport = document.getElementById('zoom-viewport');
     if (!root) return;
     const s = appView.zoomScale || 1;
     root.style.setProperty('--zoom-mult', s);
-    if (viewport) {
-      viewport.style.transformOrigin = '0 0';
-      viewport.style.transform = `translate(${appView.zoomPanX}px, ${appView.zoomPanY}px)`;
-    }
     document.querySelectorAll('.zoom-scale-readout, .zoom-level, .zoom-level-badge').forEach(el => {
       el.textContent = `${Math.round(s * 100)}%`;
     });
@@ -2270,33 +2265,7 @@
    *   panY ∈ [ch - viewportH, 0]
    */
   function clampPan() {
-    const content = document.getElementById('calendar-content');
-    if (!content) return;
-    const cw = content.offsetWidth;
-    const ch = content.offsetHeight;
-    // DOM measurements unreliable for expanded size:
-    // horizontal expansion is clipped by .calendar-week overflow:hidden so zoom-viewport
-    // never grows wider; vertical expansion causes #calendar-content itself to grow.
-    // Use stored natural dims × scale to get the true expanded content size.
-    const s = appView.zoomScale || 1;
-    const vw = (appView._zoomNaturalW || cw) * s;
-    const vh = (appView._zoomNaturalH || ch) * s;
-
-    if (vw <= cw) {
-      appView.zoomPanX = 0;
-    } else {
-      const minX = cw - vw;  // most negative — right edge of content aligned with right of container
-      const maxX = 0;
-      appView.zoomPanX = Math.min(maxX, Math.max(minX, appView.zoomPanX));
-    }
-
-    if (vh <= ch) {
-      appView.zoomPanY = 0;
-    } else {
-      const minY = ch - vh;
-      const maxY = 0;
-      appView.zoomPanY = Math.min(maxY, Math.max(minY, appView.zoomPanY));
-    }
+    // Scroll-based pan: browser clamps scrollLeft/scrollTop natively. No-op.
   }
 
   /**
@@ -2318,25 +2287,21 @@
     const mouseX = clientX - rect.left;
     const mouseY = clientY - rect.top;
 
-    // Content point under cursor in CURRENT expanded layout (1:1 mapping)
-    const contentX = mouseX - appView.zoomPanX;
-    const contentY = mouseY - appView.zoomPanY;
+    // Content coordinate under cursor (scroll-based)
+    const contentX = mouseX + content.scrollLeft;
+    const contentY = mouseY + content.scrollTop;
 
-    // After expansion ratio, that point moves to contentX * ratio in the new layout
     const ratio = clamped / oldScale;
-
     appView.zoomScale = clamped;
     root.style.setProperty('--zoom-mult', clamped);
 
-    // Keep the same physical point under the cursor
-    appView.zoomPanX = mouseX - contentX * ratio;
-    appView.zoomPanY = mouseY - contentY * ratio;
+    // Force reflow so scrollWidth/scrollHeight reflect new layout
+    void content.offsetWidth;
 
-    // The browser needs a reflow for offsetWidth to reflect the new --zoom-mult
-    // Force one by reading it:
-    void document.getElementById('zoom-viewport')?.offsetWidth;
+    // Scroll so the same content point stays under the cursor
+    content.scrollLeft = Math.max(0, contentX * ratio - mouseX);
+    content.scrollTop  = Math.max(0, contentY * ratio - mouseY);
 
-    clampPan();
     applyZoomTransform();
   }
 
@@ -2346,6 +2311,8 @@
     appView.zoomPanY = 0;
     appView._zoomNaturalW = null;
     appView._zoomNaturalH = null;
+    const content = document.getElementById('calendar-content');
+    if (content) { content.scrollLeft = 0; content.scrollTop = 0; }
     applyZoomTransform();
   }
 
@@ -2371,14 +2338,13 @@
 
     if (content._zoomCleanup) content._zoomCleanup();
 
-    // Freeze container at natural (scale=1) size so overflow:hidden clips the zoomed content.
-    // On first entry zoomScale is 1 so offsetHeight is the true natural height.
-    // On subsequent rerenders (scale already > 1) the stored value is reapplied.
-    if (!appView._zoomNaturalW) {
-      appView._zoomNaturalW = content.offsetWidth;
+    // Fix container height so scrollbars appear when content expands beyond it.
+    // Capture natural (scale=1) height on first entry; reapply on subsequent rerenders.
+    if (!appView._zoomNaturalH) {
       appView._zoomNaturalH = content.offsetHeight;
     }
     content.style.height = appView._zoomNaturalH + 'px';
+    content.style.overflow = 'auto';
 
     // ── WHEEL ─────────────────────────────────────────────────────────────────
     const onWheel = (e) => {
@@ -2407,8 +2373,8 @@
       didDrag = false;
       downX = e.clientX;
       downY = e.clientY;
-      panStartX = appView.zoomPanX;
-      panStartY = appView.zoomPanY;
+      panStartX = content.scrollLeft;
+      panStartY = content.scrollTop;
       // Prevent text selection, image drag, and native HTML5 drag
       e.preventDefault();
       // Middle-click sometimes auto-scrolls — prevent that
@@ -2425,10 +2391,8 @@
         closeLessonHoverCard();
       }
       if (didDrag) {
-        appView.zoomPanX = panStartX + dx;
-        appView.zoomPanY = panStartY + dy;
-        clampPan();
-        applyZoomTransform();
+        content.scrollLeft = panStartX - dx;
+        content.scrollTop  = panStartY - dy;
       }
     };
 
@@ -2472,8 +2436,8 @@
         touchMode = 'pan';
         t1X = e.touches[0].clientX;
         t1Y = e.touches[0].clientY;
-        panTouchStartX = appView.zoomPanX;
-        panTouchStartY = appView.zoomPanY;
+        panTouchStartX = content.scrollLeft;
+        panTouchStartY = content.scrollTop;
       } else if (e.touches.length >= 2) {
         touchMode = 'pinch';
         pinchDist0 = dist2(e.touches);
@@ -2494,10 +2458,8 @@
           root.classList.add('panning');
         }
         if (touchDidMove) {
-          appView.zoomPanX = panTouchStartX + dx;
-          appView.zoomPanY = panTouchStartY + dy;
-          clampPan();
-          applyZoomTransform();
+          content.scrollLeft = panTouchStartX - dx;
+          content.scrollTop  = panTouchStartY - dy;
           e.preventDefault();
         }
       } else if (touchMode === 'pinch' && e.touches.length >= 2) {
@@ -2527,8 +2489,8 @@
         touchDidMove = false;
         t1X = e.touches[0].clientX;
         t1Y = e.touches[0].clientY;
-        panTouchStartX = appView.zoomPanX;
-        panTouchStartY = appView.zoomPanY;
+        panTouchStartX = content.scrollLeft;
+        panTouchStartY = content.scrollTop;
       }
     };
 
