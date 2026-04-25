@@ -2271,12 +2271,16 @@
    */
   function clampPan() {
     const content = document.getElementById('calendar-content');
-    const viewport = document.getElementById('zoom-viewport');
-    if (!content || !viewport) return;
+    if (!content) return;
     const cw = content.offsetWidth;
     const ch = content.offsetHeight;
-    const vw = viewport.offsetWidth;   // already reflects layout expansion
-    const vh = viewport.offsetHeight;
+    // DOM measurements unreliable for expanded size:
+    // horizontal expansion is clipped by .calendar-week overflow:hidden so zoom-viewport
+    // never grows wider; vertical expansion causes #calendar-content itself to grow.
+    // Use stored natural dims × scale to get the true expanded content size.
+    const s = appView.zoomScale || 1;
+    const vw = (appView._zoomNaturalW || cw) * s;
+    const vh = (appView._zoomNaturalH || ch) * s;
 
     if (vw <= cw) {
       appView.zoomPanX = 0;
@@ -2340,6 +2344,8 @@
     appView.zoomScale = 1;
     appView.zoomPanX = 0;
     appView.zoomPanY = 0;
+    appView._zoomNaturalW = null;
+    appView._zoomNaturalH = null;
     applyZoomTransform();
   }
 
@@ -2364,6 +2370,15 @@
     if (!content || !root) return;
 
     if (content._zoomCleanup) content._zoomCleanup();
+
+    // Freeze container at natural (scale=1) size so overflow:hidden clips the zoomed content.
+    // On first entry zoomScale is 1 so offsetHeight is the true natural height.
+    // On subsequent rerenders (scale already > 1) the stored value is reapplied.
+    if (!appView._zoomNaturalW) {
+      appView._zoomNaturalW = content.offsetWidth;
+      appView._zoomNaturalH = content.offsetHeight;
+    }
+    content.style.height = appView._zoomNaturalH + 'px';
 
     // ── WHEEL ─────────────────────────────────────────────────────────────────
     const onWheel = (e) => {
