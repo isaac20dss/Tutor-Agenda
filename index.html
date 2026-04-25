@@ -3162,7 +3162,6 @@ button:focus:not(:focus-visible) { outline: none; }
 .zoom-mode-active .calendar-month,
 .zoom-mode-active .calendar-timeline {
   cursor: grab;
-  overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
@@ -3303,16 +3302,22 @@ button:focus:not(:focus-visible) { outline: none; }
 /* Layout expansion — colunas e células crescem fisicamente, texto fica legível */
 #calendar-root { --zoom-mult: 1; }
 
-.zoom-mode-active .calendar-week-cols {
+/* zoom-viewport expands horizontally — scrollWidth of #calendar-content sees full width */
+.zoom-mode-active #zoom-viewport {
   min-width: calc(100% * var(--zoom-mult));
 }
+
+/* Inner cols fill the already-expanded viewport (100% of zoom-viewport, not * mult again) */
+.zoom-mode-active .calendar-week-cols {
+  min-width: 100%;
+}
 .zoom-mode-active .calendar-week-header > div:last-child {
-  min-width: calc(100% * var(--zoom-mult));
+  min-width: 100%;
 }
 .zoom-mode-active .timeline-wrap,
 .zoom-mode-active .timeline-grid,
 .zoom-mode-active .timeline-header-hours {
-  min-width: calc(100% * var(--zoom-mult));
+  min-width: 100%;
 }
 .zoom-mode-active .calendar-month .month-cell {
   min-height: calc(130px * var(--zoom-mult));
