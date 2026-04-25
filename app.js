@@ -219,50 +219,59 @@
   }
 
   async function onSignedIn(session) {
-    const uid = session.user.id;
-    const email = session.user.email || '';
-    let remote = null;
     try {
-      const { data, error } = await supabase
-        .from('app_state')
-        .select('data')
-        .eq('owner_id', uid)
-        .maybeSingle();
-      if (error) throw error;
-      remote = data;
-    } catch (e) {
-      console.error('Failed to fetch app_state', e);
-      showError('Erro ao carregar', 'Não foi possível carregar seus dados do servidor: ' + (e.message || 'erro de rede') + '. Usando cache local.');
-    }
-
-    if (remote && remote.data) {
-      state = mergeWithDefaults(remote.data);
-    } else {
-      // First sign-in for this user: seed with current local state (or defaults)
-      state = mergeWithDefaults(loadLocalState());
-    }
-    state.currentUserId = uid;
-    state.sessionActive = true;
-    if (!state.users[0]) state.users.unshift({ id: uid, username: email.split('@')[0] || 'user', password: '', email, phone: '', role: 'admin', createdAt: Date.now() });
-    state.users[0].id = uid;
-    state.users[0].email = email;
-    if (!state.users[0].username) state.users[0].username = email.split('@')[0] || 'user';
-
-    saveLocalOnly();
-    remoteLoaded = true;
-
-    // If row didn't exist, create it with current state
-    if (!remote) {
+      const uid = session.user.id;
+      const email = session.user.email || '';
+      let remote = null;
       try {
-        await supabase.from('app_state').upsert(
+        const { data, error } = await supabase
+          .from('app_state')
+          .select('data')
+          .eq('owner_id', uid)
+          .maybeSingle();
+        if (error) throw error;
+        remote = data;
+      } catch (e) {
+        console.error('Failed to fetch app_state', e);
+        showError('Erro ao carregar', 'Não foi possível carregar seus dados do servidor: ' + (e.message || 'erro de rede') + '. Usando cache local.');
+      }
+
+      if (remote && remote.data) {
+        state = mergeWithDefaults(remote.data);
+      } else {
+        // First sign-in for this user: seed with defaults (do NOT inherit another user's local cache)
+        state = defaultState();
+      }
+      if (!Array.isArray(state.users)) state.users = [];
+      state.currentUserId = uid;
+      state.sessionActive = true;
+      if (!state.users[0]) state.users.unshift({ id: uid, username: email.split('@')[0] || 'user', password: '', email, phone: '', role: 'admin', createdAt: Date.now() });
+      state.users[0].id = uid;
+      state.users[0].email = email;
+      if (!state.users[0].username) state.users[0].username = email.split('@')[0] || 'user';
+
+      saveLocalOnly();
+      remoteLoaded = true;
+
+      // If row didn't exist, create it with current state
+      if (!remote) {
+        const { error: seedError } = await supabase.from('app_state').upsert(
           { owner_id: uid, data: state, updated_at: new Date().toISOString() },
           { onConflict: 'owner_id' }
         );
-      } catch (e) { console.error('Failed to seed app_state row', e); }
-    }
+        if (seedError) {
+          console.error('Failed to seed app_state row', seedError);
+          showError('Erro ao sincronizar', 'Seus dados estão salvos localmente, mas falhou ao criar o registro no servidor: ' + (seedError.message || 'erro desconhecido'));
+        }
+      }
 
-    subscribeRealtime();
-    rerender();
+      subscribeRealtime();
+    } catch (e) {
+      console.error('onSignedIn error', e);
+      showError('Erro inesperado', 'Falha ao concluir o login: ' + (e.message || 'erro desconhecido') + '. Recarregue a página.');
+    } finally {
+      try { rerender(); } catch (e) { console.error('rerender failed', e); }
+    }
   }
 
   async function onSignedOut() {
@@ -7829,23 +7838,26 @@ Ana Souza,(48)98888-0000,ana@email.com,Av Y 456,,</pre>
   // =========================================================
 
   async function boot() {
-    // If Supabase SDK failed to load, fall back to local-only mode (login disabled)
+    // Render login screen immediately so the page is never blank while async work runs
+    state.sessionActive = false;
+    state.currentUserId = null;
+    try { rerender(); } catch (e) { console.error('Initial rerender failed', e); }
+
     if (!supabase) {
-      state.sessionActive = false;
-      state.currentUserId = null;
-      rerender();
       showError('Serviço offline', 'Não foi possível carregar o Supabase SDK. Verifique sua conexão e recarregue a página.');
       return;
     }
 
-    // React to auth changes (e.g. token refresh or sign-out in another tab)
+    // React to auth changes (token refresh, sign-out in another tab, etc.)
     supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_OUT') {
-        await onSignedOut();
-      } else if (event === 'SIGNED_IN' && session && !remoteLoaded) {
-        await onSignedIn(session);
-      } else if (event === 'TOKEN_REFRESHED' && session && !remoteLoaded) {
-        await onSignedIn(session);
+      try {
+        if (event === 'SIGNED_OUT') {
+          await onSignedOut();
+        } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session && !remoteLoaded) {
+          await onSignedIn(session);
+        }
+      } catch (e) {
+        console.error('Auth state change handler error', e);
       }
     });
 
@@ -7853,16 +7865,10 @@ Ana Souza,(48)98888-0000,ana@email.com,Av Y 456,,</pre>
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         await onSignedIn(session);
-      } else {
-        state.sessionActive = false;
-        state.currentUserId = null;
-        rerender();
       }
     } catch (e) {
       console.error('Boot error', e);
-      state.sessionActive = false;
-      state.currentUserId = null;
-      rerender();
+      showError('Erro ao iniciar', 'Falha ao verificar sessão: ' + (e.message || 'erro desconhecido'));
     }
   }
 
