@@ -31,6 +31,7 @@
   let realtimeChannel = null;     // active realtime subscription
   let saveTimer = null;           // debounce timer for remote upsert
   let lastSaveAt = 0;             // timestamp of last outgoing upsert (for realtime echo suppression)
+  let signingIn = false;          // mutex: prevents concurrent onSignedIn calls
 
   function uid(prefix = 'id') {
     return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -219,6 +220,8 @@
   }
 
   async function onSignedIn(session) {
+    if (signingIn) return;
+    signingIn = true;
     try {
       const uid = session.user.id;
       const email = session.user.email || '';
@@ -270,11 +273,13 @@
       console.error('onSignedIn error', e);
       showError('Erro inesperado', 'Falha ao concluir o login: ' + (e.message || 'erro desconhecido') + '. Recarregue a página.');
     } finally {
+      signingIn = false;
       try { rerender(); } catch (e) { console.error('rerender failed', e); }
     }
   }
 
   async function onSignedOut() {
+    signingIn = false;
     remoteLoaded = false;
     unsubscribeRealtime();
     state = defaultState();
@@ -7848,13 +7853,13 @@ Ana Souza,(48)98888-0000,ana@email.com,Av Y 456,,</pre>
       return;
     }
 
-    // React to auth changes (token refresh, sign-out in another tab, etc.)
+    // React to auth changes: only handle SIGNED_OUT (cross-tab logout).
+    // SIGNED_IN is handled directly in the form submit and in getSession() below.
+    // Handling it here too would cause a concurrent double-call to onSignedIn.
     supabase.auth.onAuthStateChange(async (event, session) => {
       try {
         if (event === 'SIGNED_OUT') {
           await onSignedOut();
-        } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session && !remoteLoaded) {
-          await onSignedIn(session);
         }
       } catch (e) {
         console.error('Auth state change handler error', e);
