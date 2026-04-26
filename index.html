@@ -230,9 +230,18 @@
 }
 
 /* ============ DARK PALETTES ============ */
-[data-theme="dark"][data-palette="parchment"],
 [data-theme="dark"][data-palette="paper"] {
   /* default pure black - above */
+}
+
+[data-theme="dark"][data-palette="parchment"] {
+  /* warm charcoal — distinguishable from paper's pure black */
+  --bg: #0f0d0a;
+  --bg-elevated: #1a1612;
+  --bg-sunken: #080604;
+  --surface: #1a1612;
+  --surface-hover: #232019;
+  --surface-active: #2e2a21;
 }
 
 [data-theme="dark"][data-palette="sky"] {
