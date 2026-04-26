@@ -1067,7 +1067,7 @@
         <form id="login-form" autocomplete="off">
           <div class="field">
             <label class="field-label" for="login-id" id="login-id-label">E-mail ou usuário</label>
-            <input type="text" class="input" id="login-id" placeholder="voce@exemplo.com ou Admin" autocomplete="username" />
+            <input type="text" class="input" id="login-id" placeholder="voce@exemplo.com ou usuário" autocomplete="username" />
           </div>
 
           <div class="field">
